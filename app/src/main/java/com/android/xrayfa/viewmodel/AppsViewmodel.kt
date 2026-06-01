@@ -1,30 +1,22 @@
 package com.android.xrayfa.viewmodel
 
-import android.content.Context
-import android.content.pm.PackageManager
-import android.graphics.Canvas
-import android.graphics.drawable.Drawable
-import android.util.Log
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.painter.Painter
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.android.xrayfa.common.repository.SettingsRepository
+import com.android.xrayfa.repository.AppInfoRepository
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 import javax.inject.Inject
-import androidx.compose.runtime.setValue
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.graphics.painter.BitmapPainter
-import androidx.compose.ui.graphics.painter.Painter
-import androidx.core.graphics.createBitmap
-import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.withContext
 
 
 data class AppInfo(
@@ -36,21 +28,66 @@ data class AppInfo(
 
 class AppsViewmodel(
     private val settingsRepo: SettingsRepository,
-): ViewModel() {
+    private val appInfoRepo: AppInfoRepository,
+) : ViewModel() {
 
+    /** 搜索关键字。空串表示不过滤。 */
+    private val searchQuery = MutableStateFlow("")
 
-    var searchAppCompleted by mutableStateOf(false)
-
-    private val _appInfos = MutableStateFlow<List<AppInfo>>(emptyList())
-    var appInfos: StateFlow<List<AppInfo>> = _appInfos
-    val appInfoList = mutableStateListOf<AppInfo>()
+    /** 当前已选中的允许包列表，供 UI 直接订阅。 */
     val allowedPackagesState = settingsRepo.packagesFlow.stateIn(
         scope = viewModelScope,
         started = SharingStarted.WhileSubscribed(5000),
         initialValue = emptyList()
     )
 
-    fun setAllowedPackages(packages: List<String>,callback: suspend ()-> Unit) {
+    /**
+     * 加载状态：缓存仓库内部维护，UI 用此值控制 Loading 指示器。
+     * 命中缓存时 [AppInfoRepository.load] 立即返回，loading 不会被翻转。
+     */
+    val loading: StateFlow<Boolean> = appInfoRepo.loading
+
+    /**
+     * 实际给 UI 渲染的列表：
+     *   缓存的应用元数据 × 用户允许列表 × 搜索关键字 → List<AppInfo>
+     *
+     * - 缓存为 null（首次加载未完成）→ 返回空列表，由 [loading] 控制 Loading UI。
+     * - 切换勾选 / Clear All → 仅触发 combine 重新发射，不重扫描 PM。
+     * - 系统包变化 → 仓库自动重载，combine 自动重新发射。
+     */
+    val displayedApps: StateFlow<List<AppInfo>> = combine(
+        appInfoRepo.apps,
+        settingsRepo.packagesFlow,
+        searchQuery,
+    ) { cached, allowed, query ->
+        if (cached == null) return@combine emptyList()
+        val allowedSet = allowed.toHashSet()
+        val q = query.trim()
+        val filtered = if (q.isEmpty()) {
+            cached
+        } else {
+            cached.filter { it.appName.contains(q, ignoreCase = true) || it.packageName.contains(q, ignoreCase = true) }
+        }
+        filtered.map { meta ->
+            AppInfo(
+                appName = meta.appName,
+                packageName = meta.packageName,
+                icon = meta.icon,
+                allow = meta.packageName in allowedSet,
+            )
+        }
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5000),
+        initialValue = emptyList()
+    )
+
+    /** 触发首次加载（或在 forceRefresh 时强制刷新），仓库内部去重。 */
+    fun load(forceRefresh: Boolean = false) {
+        viewModelScope.launch { appInfoRepo.load(forceRefresh) }
+    }
+
+    fun setAllowedPackages(packages: List<String>, callback: suspend () -> Unit = {}) {
         viewModelScope.launch(Dispatchers.IO) {
             settingsRepo.setAllowedPackages(packages)
             callback()
@@ -69,96 +106,21 @@ class AppsViewmodel(
         }
     }
 
-
-    suspend fun refreshAppInfoList() {
-        Log.i("===", "refreshAppInfoList:  ${_appInfos.value.hashCode()}")
-        if (settingsRepo.getAllowedPackages().isEmpty()) {
-            val list = _appInfos.value.map {
-                it.copy(allow = false)
-            }
-            _appInfos.value = list
-        }
-        Log.i("==2", "refreshAppInfoList:  ${_appInfos.value.hashCode()}")
-    }
-
-    suspend fun getInstalledPackages(context: Context){
-        val pm = context.packageManager
-        searchAppCompleted = false
-        val installedPackages = pm.getInstalledPackages(PackageManager.GET_PERMISSIONS)
-        val list = installedPackages.mapNotNull { pkgInfo ->
-            val appInfo = pkgInfo.applicationInfo ?: return@mapNotNull null
-
-            val label = runCatching {
-                pm.getApplicationLabel(appInfo).toString().trim()
-            }.getOrNull() ?: return@mapNotNull null
-            val hasInternet = pkgInfo.requestedPermissions
-                ?.contains(android.Manifest.permission.INTERNET) == true
-            if (!hasInternet || label.isEmpty()) {
-                return@mapNotNull null
-            }
-
-            val drawable = runCatching { pm.getApplicationIcon(appInfo) }.getOrNull()
-                ?: return@mapNotNull null
-
-            val allow = settingsRepo.getAllowedPackages().contains(pkgInfo.packageName)
-            AppInfo(
-                appName = label,
-                packageName = pkgInfo.packageName,
-                icon = drawable.toPainter(),
-                allow = allow
-            )
-        }.sortedBy { it.appName.lowercase() }
-        appInfoList.clear()
-        appInfoList.addAll(list)
-        _appInfos.value = appInfoList
-        searchAppCompleted = true
-    }
-
-
-    suspend fun onSearch(query: String) {
-        if (query.isEmpty()) {
-            withContext(Dispatchers.Main) {
-                _appInfos.value = appInfoList
-            }
-            return
-        }
-        val filterList = appInfoList.filter {
-            return@filter (it.appName.contains(query) || it.packageName.contains(query))
-        }
-
-        withContext(Dispatchers.Main) {
-            _appInfos.value = filterList
-        }
+    fun onSearch(query: String) {
+        searchQuery.value = query
     }
 }
 
-fun Drawable.toPainter(maxSize: Int = 48): Painter {
-    val width = intrinsicWidth.takeIf { it > 0 } ?: 1
-    val height = intrinsicHeight.takeIf { it > 0 } ?: 1
-
-
-    val scale = minOf(maxSize.toFloat() / width, maxSize.toFloat() / height, 1f)
-
-    val bitmapWidth = (width * scale).toInt().coerceAtLeast(1)
-    val bitmapHeight = (height * scale).toInt().coerceAtLeast(1)
-
-    val bitmap = createBitmap(bitmapWidth, bitmapHeight)
-    val canvas = Canvas(bitmap)
-    setBounds(0, 0, bitmapWidth, bitmapHeight)
-    draw(canvas)
-
-    return BitmapPainter(bitmap.asImageBitmap())
-}
 class AppsViewmodelFactory
 @Inject constructor(
-    val settingsRepo: SettingsRepository,
-    ): ViewModelProvider.Factory {
-
+    private val settingsRepo: SettingsRepository,
+    private val appInfoRepo: AppInfoRepository,
+) : ViewModelProvider.Factory {
 
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
         if (modelClass.isAssignableFrom(AppsViewmodel::class.java)) {
-            return AppsViewmodel(settingsRepo) as T
+            return AppsViewmodel(settingsRepo, appInfoRepo) as T
         }
         throw IllegalArgumentException("Unknown ViewModel class")
     }

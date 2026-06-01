@@ -47,7 +47,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
-import androidx.compose.ui.platform.LocalContext
 import com.android.xrayfa.viewmodel.AppsViewmodel
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -68,10 +67,8 @@ import androidx.compose.ui.unit.dp
 import androidx.navigation3.ui.LocalNavAnimatedContentScope
 import com.android.xrayfa.R
 import com.android.xrayfa.ui.navigation.Apps
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
 
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalMaterial3ExpressiveApi::class)
@@ -90,13 +87,15 @@ fun AppsScreen(
     val isScrolled by remember {
         derivedStateOf { scrollBehavior.state.overlappedFraction > 0f }
     }
-    val searchAppInfoCompleted by remember { derivedStateOf { viewmodel.searchAppCompleted } }
+    val isLoading by viewmodel.loading.collectAsState()
+    // 当仓库还在加载且当前还没有可显示的数据时，UI 显示 Loading 指示器；
+    // 命中缓存时 isLoading 始终为 false，列表瞬时呈现。
+    val searchAppInfoCompleted by remember { derivedStateOf { !isLoading } }
     // Animate the shadow elevation for a smooth transition
     val appBarElevation by animateDpAsState(
         targetValue = if (isScrolled) 4.dp else 0.dp,
         label = "TopBarShadowElevation"
     )
-    val context = LocalContext.current
     with(sharedTransitionScope) {
         Scaffold(
             topBar = {
@@ -176,9 +175,9 @@ fun AppsScreen(
                     actions = {
                         IconButton(
                             onClick = {
-                                viewmodel.setAllowedPackages(emptyList()) {
-                                    viewmodel.getInstalledPackages(context)
-                                }
+                                // allow 是从 packagesFlow 派生的，清空后 UI 会自动刷新，
+                                // 不再需要重新扫描 PackageManager。
+                                viewmodel.setAllowedPackages(emptyList()) {}
                             }
                         ) {
                             Icon(
@@ -205,9 +204,8 @@ fun AppsScreen(
 
 
             LaunchedEffect(Unit) {
-                withContext(Dispatchers.IO) {
-                    viewmodel.getInstalledPackages(context)
-                }
+                // 仓库内部已 dedupe + Mutex，这里不必再切换 IO 线程。
+                viewmodel.load()
             }
             Box(
                 modifier = Modifier.fillMaxSize()
@@ -221,7 +219,7 @@ fun AppsScreen(
                             .size(68.dp)
                     )
                 }else {
-                    val appInfos by viewmodel.appInfos.collectAsState()
+                    val appInfos by viewmodel.displayedApps.collectAsState()
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.nestedScroll(scrollBehavior.nestedScrollConnection)
