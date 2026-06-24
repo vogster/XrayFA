@@ -481,7 +481,7 @@ fun SubscriptionScreen(
                                         urlIsNullOrInvalid = it
                                     }
                                 },
-                                enabled = !urlIsNullOrInvalid && !nickNameIsNull,
+                                enabled = !urlIsNullOrInvalid,
                                 shape = RoundedCornerShape(12.dp)
                             ) {
                                 Text(stringResource(R.string.confirm))
