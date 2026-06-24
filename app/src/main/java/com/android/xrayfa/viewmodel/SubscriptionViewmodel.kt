@@ -97,10 +97,8 @@ class SubscriptionViewmodel(
                 url = subscription.url,
                 subscriptionId = 0
             ) {
-                val mark = if(subscription.mark.isNullOrEmpty()){
-                    it.profileTitle
-                } else {
-                    subscription.mark
+                val mark = subscription.mark.ifEmpty {
+                    it.profileTitle.orEmpty()
                 }
 
                 _subscriptionMeta.value?.profileTitle = mark
