@@ -101,7 +101,7 @@ class SubscriptionViewmodel(
                     it.profileTitle.orEmpty()
                 }
 
-                _subscriptionMeta.value?.profileTitle = mark
+                _subscriptionMeta.value = _subscriptionMeta.value?.copy(profileTitle = mark)
 
                 val sub = Subscription(
                     id = subscription.id,
