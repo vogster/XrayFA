@@ -70,6 +70,7 @@
     <string name="xray_core_version">Версия Xray‑core</string>
     <string name="general_part">Основное</string>
     <string name="network_part">Сеть</string>
+    <string name="subscription_part">Подписка</string>
     <string name="about_part">Дополнительно</string>
     <string name="geo_lite_title" translatable="false">Geo_ip_lite</string>
     <string name="geo_ip_lite_description">IP‑адреса и соответствующая информация о странах</string>
@@ -110,6 +111,8 @@
     <string name="err_socks_invalid_chars">Содержатся недопустимые символы</string>
     <string name="socks_address_listen_title">Адрес прослушивания</string>
     <string name="socks_address_listen_desc">Адрес прослушивания (127.0.0.1 по умолчанию)</string>
+    <string name="send_hwid">Отправлять hwid</string>
+    <string name="send_hwid_desc">Отправлять hwid при запросе подписки</string>
 
     <string name="logcat_start">Начать запись</string>
     <string name="logcat_stop">Остановить запись</string>
@@ -120,6 +123,13 @@
     <string name="logcat_duration_infinite">Всегда</string>
     <string name="logcat_recording">Запись... Осталось %1$dс</string>
     <string name="copied">Скопировано в буфер обмена</string>
+    <string name="core_start_failed">Не удалось запустить Xray-core</string>
+    <string name="route_settings_title">Настройки маршрутизации</string>
+    <string name="route_settings_desc">Пользовательские настройки маршрутизации</string>
+    <string name="routing_mode_label">Режим маршрутизации</string>
+    <string name="routing_mode_global">Глобальный режим</string>
+    <string name="routing_mode_route">Режим маршрута</string>
+    <string name="import_manually">Вручную</string>
 
     <string name="bug_report_header">Отчет об ошибке</string>
     <string name="bug_report_title_label">Заголовок</string>
@@ -142,4 +152,9 @@
     <string name="next_node">Пост-узел</string>
     <string name="none">Нет</string>
     <string name="share_subscription">Поделиться подпиской</string>
+
+    <string name="apps_permission_required_title">Требуется разрешение</string>
+    <string name="apps_permission_required_desc">Чтобы отобразить список установленных приложений для прокси отдельных приложений, предоставьте разрешение «Все приложения» / «Запрос всех пакетов» для %1$s в настройках системы.</string>
+    <string name="apps_permission_open_settings">Открыть настройки</string>
+    <string name="apps_permission_retry">Повторить</string>
 </resources>

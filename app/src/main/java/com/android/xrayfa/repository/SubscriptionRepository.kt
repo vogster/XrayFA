@@ -61,7 +61,11 @@ class SubscriptionRepository
         val requestBuilder = Request.Builder()
             .get()
             .url(url)
-            .addHeader(XHWID, currentSettings.hwid)
+            .apply {
+                if (currentSettings.sendHwid) {
+                    addHeader(XHWID, currentSettings.hwid)
+                }
+            }
 
         extraHeaders.forEach { (key, value) ->
             requestBuilder.addHeader(key, value)

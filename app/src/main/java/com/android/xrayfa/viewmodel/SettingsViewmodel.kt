@@ -223,6 +223,12 @@ class SettingsViewmodel(
         }
     }
 
+    fun setSendHwid(enable: Boolean){
+        viewModelScope.launch {
+            repository.setSendHwid(enable)
+        }
+    }
+
     suspend fun onConfigSettingsChanged() {
         xrayBaseServiceManager.restartXrayBaseServiceIfNeed()
     }

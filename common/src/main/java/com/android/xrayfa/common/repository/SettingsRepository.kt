@@ -101,7 +101,8 @@ data class SettingsState(
     val domainStrategy: Int = DomainStrategy.IP_IF_NON_MATCH,
     val routingRules: String = defaultRoutes,
     val routingMode: Int = RoutingMode.ROUTE,
-    val hwid: String = ""
+    val hwid: String = "",
+    val sendHwid: Boolean = true
 )
 object SettingsKeys {
     val DARK_MODE = intPreferencesKey("dark_mode")
@@ -128,6 +129,7 @@ object SettingsKeys {
     val ROUTING_RULES = stringPreferencesKey("ROUTING_RULES")
     val ROUTING_MODE = intPreferencesKey("routing_mode")
     val HWID = stringPreferencesKey("hwid")
+    val SEND_HWID = booleanPreferencesKey("send_hwid")
 }
 
 const val DEFAULT_DELAY_TEST_URL = "https://www.google.com"
@@ -203,7 +205,8 @@ class SettingsRepository
             domainStrategy = prefs[SettingsKeys.DOMAIN_STRATEGY]?: DomainStrategy.IP_IF_NON_MATCH,
             routingRules = prefs[SettingsKeys.ROUTING_RULES]?: defaultRoutes,
             routingMode = prefs[SettingsKeys.ROUTING_MODE] ?: RoutingMode.ROUTE,
-            hwid = prefs[SettingsKeys.HWID] ?: ""
+            hwid = prefs[SettingsKeys.HWID] ?: "",
+            sendHwid = prefs[SettingsKeys.SEND_HWID] ?: true
         )
 
     }
@@ -323,6 +326,12 @@ class SettingsRepository
     suspend fun setSocksListen(address: String) {
         context.dataStore.edit {
             it[SettingsKeys.SOCKS_LISTEN] = address
+        }
+    }
+
+    suspend fun setSendHwid(enable: Boolean) {
+        context.dataStore.edit {
+            it[SettingsKeys.SEND_HWID] = enable
         }
     }
 
