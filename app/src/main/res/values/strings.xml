@@ -71,6 +71,7 @@
     <string name="xray_core_version">Xray core version</string>
     <string name="general_part">general</string>
     <string name="network_part">network</string>
+    <string name="subscirption_part">subscription</string>
     <string name="about_part">other</string>
     <string name="geo_lite_title" translatable="false">Geo_ip_lite</string>
     <string name="geo_ip_lite_description">IP address and corresponding country information</string>
@@ -111,6 +112,8 @@
     <string name="err_socks_invalid_chars">contains invalid chars</string>
     <string name="socks_address_listen_title">listen</string>
     <string name="socks_address_listen_desc">listen address(127.0.0.1 default)</string>
+    <string name="send_hwid">Send hwid</string>
+    <string name="send_hwid_desc">Send hwid when requesting a subscription</string>
 
     <string name="logcat_start">Start</string>
     <string name="logcat_stop">Stop</string>
