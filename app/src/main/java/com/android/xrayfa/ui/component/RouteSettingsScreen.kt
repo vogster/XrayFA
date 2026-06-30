@@ -50,11 +50,7 @@ fun RouteSettingsScreen(
         val isSystem = rule.inboundTag?.any { it == "api" || it == "tun" } == true
         val isPreset = rule.ruleTag == telegramRule.ruleTag ||
                        rule.ruleTag == chinaRule.ruleTag ||
-                       rule.ruleTag == adBlockRule.ruleTag ||
-                       // Fallback for rules without tags (old data)
-                       (rule.domain?.contains("geosite:cn") == true) ||
-                       (rule.domain?.contains("geosite:telegram") == true) ||
-                       (rule.domain?.contains("geosite:category-ads-all") == true)
+                       rule.ruleTag == adBlockRule.ruleTag
 
         !isSystem && !isPreset
     }
@@ -84,11 +80,14 @@ fun RouteSettingsScreen(
             },
             floatingActionButton = {
                 ExtendedFloatingActionButton(
-                    onClick = { if (isRouteMode) showAddSheet = true },
+                    onClick = {
+                        if (!isRouteMode) viewmodel.setRoutingMode(RoutingMode.ROUTE)
+                        showAddSheet = true
+                    },
                     icon = { Icon(Icons.Default.Add, contentDescription = "Add") },
                     text = { Text("Add Custom Rule") },
-                    containerColor = if (isRouteMode) FloatingActionButtonDefaults.containerColor else MaterialTheme.colorScheme.surfaceVariant,
-                    contentColor = if (isRouteMode) contentColorFor(FloatingActionButtonDefaults.containerColor) else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
+                    containerColor = FloatingActionButtonDefaults.containerColor,
+                    contentColor = contentColorFor(FloatingActionButtonDefaults.containerColor)
                 )
             }
         ) { padding ->
@@ -106,9 +105,13 @@ fun RouteSettingsScreen(
                 // --- Routing Mode Section ---
                 item {
                     SettingsGroup(groupName = stringResource(R.string.routing_mode_label)) {
-                        RoutingModeSelector(
-                            currentMode = settingsState.routingMode,
-                            onModeSelected = { viewmodel.setRoutingMode(it) }
+                        RoutingEnabledSwitch(
+                            checked = isRouteMode,
+                            onCheckedChange = {
+                                viewmodel.setRoutingMode(
+                                    if (it) RoutingMode.ROUTE else RoutingMode.GLOBAL
+                                )
+                            }
                         )
                     }
                 }
@@ -227,6 +230,7 @@ fun RouteSettingsScreen(
                     // saveRules will ensure they are placed above presets.
                     val newList = allRules + newRule
                     allRules = newList
+                    if (!isRouteMode) viewmodel.setRoutingMode(RoutingMode.ROUTE)
                     saveRules(newList)
                     showAddSheet = false
                 }
@@ -371,6 +375,26 @@ fun DomainStrategySelector(
 }
 
 @Composable
+fun RoutingEnabledSwitch(
+    checked: Boolean,
+    onCheckedChange: (Boolean) -> Unit
+) {
+    ListItem(
+        headlineContent = { Text("Routing") },
+        supportingContent = {
+            Text(
+                text = if (checked) "Custom routing rules are active" else "Routing is disabled",
+                style = MaterialTheme.typography.bodySmall
+            )
+        },
+        trailingContent = {
+            Switch(checked = checked, onCheckedChange = onCheckedChange)
+        },
+        colors = ListItemDefaults.colors(containerColor = androidx.compose.ui.graphics.Color.Transparent)
+    )
+}
+
+@Composable
 fun QuickConfigCheckbox(
     label: String,
     description: String,
@@ -416,18 +440,7 @@ fun ManualRuleCard(
         Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(modifier = Modifier.weight(1f)) {
-                    Text(
-                        text = rule.ruleTag ?: "Custom Rule",
-                        style = MaterialTheme.typography.titleSmall,
-                        color = if (enabled) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.primary.copy(alpha = 0.38f)
-                    )
-                    if (rule.ruleTag != null) {
-                        Text(
-                            text = "Custom Rule",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = if (enabled) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.38f)
-                        )
-                    }
+                    Text("Custom Rule", style = MaterialTheme.typography.titleSmall)
                 }
                 IconButton(onClick = onDelete, enabled = enabled) {
                     Icon(
@@ -441,6 +454,21 @@ fun ManualRuleCard(
             Spacer(modifier = Modifier.height(8.dp))
 
             OutlinedTextField(
+                value = rule.ruleTag ?: "",
+                onValueChange = { value ->
+                    onRuleChanged(rule.copy(ruleTag = value.trim().takeIf { it.isNotEmpty() }))
+                },
+                label = { Text("Rule Name") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = enabled,
+                leadingIcon = { Icon(Icons.Default.Label, contentDescription = null) },
+                shape = MaterialTheme.shapes.medium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
                 value = rule.outboundTag ?: "",
                 onValueChange = { onRuleChanged(rule.copy(outboundTag = it)) },
                 label = { Text("Outbound Tag") },
@@ -449,38 +477,66 @@ fun ManualRuleCard(
                 enabled = enabled,
                 shape = MaterialTheme.shapes.medium
             )
-            
-            val domainsStr = rule.domain?.joinToString(", ") ?: ""
-            if (domainsStr.isNotEmpty()) {
-                Text(
-                    text = "Domains: $domainsStr",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                    modifier = Modifier.padding(top = 8.dp)
-                )
-            }
 
-            val ipsStr = rule.ip?.joinToString(", ") ?: ""
-            if (ipsStr.isNotEmpty()) {
-                Text(
-                    text = "IPs: $ipsStr",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
+            Spacer(modifier = Modifier.height(8.dp))
 
-            if (!rule.port.isNullOrEmpty()) {
-                Text(
-                    text = "Port: ${rule.port}",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (enabled) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
-                    modifier = Modifier.padding(top = 4.dp)
-                )
-            }
+            OutlinedTextField(
+                value = rule.domain?.joinToString(", ") ?: "",
+                onValueChange = { value ->
+                    onRuleChanged(rule.copy(domain = value.toRuleList()))
+                },
+                label = { Text("Domains") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                enabled = enabled,
+                supportingText = {
+                    Text("Comma or newline separated: domain:example.com, geosite:category")
+                },
+                shape = MaterialTheme.shapes.medium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = rule.ip?.joinToString(", ") ?: "",
+                onValueChange = { value ->
+                    onRuleChanged(rule.copy(ip = value.toRuleList()))
+                },
+                label = { Text("IPs") },
+                modifier = Modifier.fillMaxWidth(),
+                minLines = 2,
+                enabled = enabled,
+                supportingText = {
+                    Text("Comma or newline separated: 10.0.0.0/8, geoip:private")
+                },
+                shape = MaterialTheme.shapes.medium
+            )
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            OutlinedTextField(
+                value = rule.port ?: "",
+                onValueChange = { value ->
+                    onRuleChanged(rule.copy(port = value.trim().takeIf { it.isNotEmpty() }))
+                },
+                label = { Text("Port") },
+                modifier = Modifier.fillMaxWidth(),
+                singleLine = true,
+                enabled = enabled,
+                supportingText = {
+                    Text("Optional: 53, 443, 0-65535")
+                },
+                shape = MaterialTheme.shapes.medium
+            )
         }
     }
 }
+
+private fun String.toRuleList(): List<String>? =
+    split(",", "\n")
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .takeIf { it.isNotEmpty() }
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -524,6 +580,6 @@ fun RoutingModeSelector(
                     )
                 }
             }
+            }
         }
     }
-}

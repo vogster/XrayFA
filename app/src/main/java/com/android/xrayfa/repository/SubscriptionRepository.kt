@@ -74,6 +74,9 @@ class SubscriptionRepository
         }
 
         val subscriptionMeta = HttpResponseUtils.parseSubscriptionMeta(response)
+        subscriptionMeta.routing?.let { routingLink ->
+            settingsRepository.applyRoutingLink(routingLink)
+        }
 
         val content = response.body?.string() ?: return subscriptionMeta
         if (content.isBlank()) return subscriptionMeta

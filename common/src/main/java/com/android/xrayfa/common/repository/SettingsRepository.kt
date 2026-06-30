@@ -11,10 +11,14 @@ import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.google.gson.Gson
+import com.google.gson.JsonElement
+import com.google.gson.JsonParser
 import com.google.gson.annotations.SerializedName
 import com.google.gson.reflect.TypeToken
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import java.net.URLDecoder
+import java.util.Base64
 import javax.inject.Inject
 import javax.inject.Singleton
 
@@ -133,6 +137,7 @@ object SettingsKeys {
 const val DEFAULT_DELAY_TEST_URL = "https://www.google.com"
 
 val listType = object : TypeToken<MutableList<String>>() {}.type
+private val routingRuleListType = object : TypeToken<List<Rule>>() {}.type
 
 @IntDef(value = [
     Theme.LIGHT_MODE,
@@ -236,6 +241,211 @@ class SettingsRepository
             it[SettingsKeys.ROUTING_RULES] = rulesString
         }
     }
+
+    suspend fun applyRoutingLink(link: String): Boolean {
+        val normalizedLink = link.trim()
+        if (!normalizedLink.startsWith(ROUTING_LINK_PREFIX, ignoreCase = true)) return false
+
+        val commandAndPayload = normalizedLink.removePrefixIgnoreCase(ROUTING_LINK_PREFIX)
+        val command = commandAndPayload.substringBefore("/").lowercase()
+        val payload = commandAndPayload.substringAfter("/", missingDelimiterValue = "")
+
+        return when (command) {
+            ROUTING_COMMAND_OFF -> {
+                setRoutingMode(RoutingMode.GLOBAL)
+                true
+            }
+            ROUTING_COMMAND_ADD,
+            ROUTING_COMMAND_ON_ADD -> {
+                val routingConfig = decodeRoutingConfig(payload) ?: return false
+                setRoutingRules(withSystemRoutingRules(routingConfig.rules))
+                routingConfig.domainStrategy?.let { setDomainStrategy(it) }
+                setRoutingMode(RoutingMode.ROUTE)
+                true
+            }
+            else -> false
+        }
+    }
+
+    private fun decodeRoutingConfig(payload: String): RoutingConfig? {
+        val json = decodeRoutingPayload(payload) ?: return null
+        val root = runCatching { JsonParser.parseString(json) }.getOrNull() ?: return null
+
+        parseHappRoutingProfile(root)?.let { return it }
+
+        val rulesElement = findRoutingRulesElement(root) ?: root
+        val rules = runCatching {
+            if (rulesElement.isJsonArray) {
+                gson.fromJson<List<Rule>>(rulesElement, routingRuleListType)
+            } else {
+                listOf(gson.fromJson(rulesElement, Rule::class.java))
+            }
+        }.getOrNull()
+
+        return rules?.filter { it.outboundTag != null || it.balancerTag != null }
+            ?.takeIf { it.isNotEmpty() }
+            ?.let { RoutingConfig(rules = it) }
+    }
+
+    private fun parseHappRoutingProfile(element: JsonElement): RoutingConfig? {
+        if (!element.isJsonObject) return null
+
+        val obj = element.asJsonObject
+        val hasHappRoutingFields = listOf(
+            "DirectSites",
+            "DirectIp",
+            "ProxySites",
+            "ProxyIp",
+            "BlockSites",
+            "BlockIp",
+            "GlobalProxy"
+        ).any { obj.has(it) }
+        if (!hasHappRoutingFields) return null
+
+        val namePrefix = obj.get("Name")?.asStringOrNull()?.takeIf { it.isNotBlank() }
+            ?.let { "$it " }
+            .orEmpty()
+        val globalProxy = obj.get("GlobalProxy")?.asBooleanString() == true
+        val routeOrder = obj.get("RouteOrder")?.asStringOrNull()
+            ?.split("-")
+            ?.map { it.trim().lowercase() }
+            ?.filter { it in setOf("block", "direct", "proxy") }
+            ?.distinct()
+            ?.takeIf { it.isNotEmpty() }
+            ?: listOf("block", "direct", "proxy")
+
+        val rules = routeOrder.mapNotNull { route ->
+            when (route) {
+                "block" -> buildHappRule(
+                    ruleTag = "${namePrefix}Block",
+                    outboundTag = "block",
+                    domains = obj.getStringList("BlockSites"),
+                    ips = obj.getStringList("BlockIp")
+                )
+                "direct" -> buildHappRule(
+                    ruleTag = "${namePrefix}Direct",
+                    outboundTag = "direct",
+                    domains = obj.getStringList("DirectSites"),
+                    ips = obj.getStringList("DirectIp")
+                )
+                "proxy" -> buildHappRule(
+                    ruleTag = "${namePrefix}Proxy",
+                    outboundTag = "proxy",
+                    domains = obj.getStringList("ProxySites"),
+                    ips = obj.getStringList("ProxyIp"),
+                    fallbackToAllTraffic = globalProxy
+                )
+                else -> null
+            }
+        }
+
+        return rules.takeIf { it.isNotEmpty() }?.let {
+            RoutingConfig(
+                rules = it,
+                domainStrategy = obj.get("DomainStrategy")?.asDomainStrategy()
+            )
+        }
+    }
+
+    private fun buildHappRule(
+        ruleTag: String,
+        outboundTag: String,
+        domains: List<String>,
+        ips: List<String>,
+        fallbackToAllTraffic: Boolean = false
+    ): Rule? {
+        val hasDomains = domains.isNotEmpty()
+        val hasIps = ips.isNotEmpty()
+        if (!hasDomains && !hasIps && !fallbackToAllTraffic) return null
+
+        return Rule(
+            type = "field",
+            outboundTag = outboundTag,
+            domain = domains.takeIf { it.isNotEmpty() },
+            ip = ips.takeIf { it.isNotEmpty() },
+            port = if (!hasDomains && !hasIps && fallbackToAllTraffic) "0-65535" else null,
+            ruleTag = ruleTag
+        )
+    }
+
+    private fun withSystemRoutingRules(rules: List<Rule>): List<Rule> {
+        val systemRules = runCatching {
+            gson.fromJson<List<Rule>>(defaultRoutes, routingRuleListType)
+        }.getOrNull()
+            ?.filter { it.isSystemRoutingRule() }
+            .orEmpty()
+
+        return systemRules + rules.filterNot { it.isSystemRoutingRule() }
+    }
+
+    private fun Rule.isSystemRoutingRule(): Boolean =
+        inboundTag?.any { it == "api" || it == "tun" } == true
+
+    private fun findRoutingRulesElement(element: JsonElement): JsonElement? {
+        if (!element.isJsonObject) return null
+
+        val obj = element.asJsonObject
+        obj.get("rules")?.let { return it }
+        obj.get("routing")
+            ?.takeIf { it.isJsonObject }
+            ?.asJsonObject
+            ?.get("rules")
+            ?.let { return it }
+
+        return null
+    }
+
+    private fun JsonElement.asStringOrNull(): String? =
+        runCatching {
+            if (isJsonPrimitive) asString else null
+        }.getOrNull()
+
+    private fun JsonElement.asBooleanString(): Boolean? =
+        asStringOrNull()?.trim()?.lowercase()?.toBooleanStrictOrNull()
+
+    private fun JsonElement.asDomainStrategy(): Int? =
+        when (asStringOrNull()?.trim()?.lowercase()) {
+            "asis" -> DomainStrategy.ASIS
+            "ipifnonmatch" -> DomainStrategy.IP_IF_NON_MATCH
+            "ipondemand" -> DomainStrategy.IP_ON_DEMAND
+            else -> null
+        }
+
+    private fun com.google.gson.JsonObject.getStringList(key: String): List<String> =
+        get(key)
+            ?.takeIf { it.isJsonArray }
+            ?.asJsonArray
+            ?.mapNotNull { it.asStringOrNull()?.trim()?.takeIf(String::isNotEmpty) }
+            .orEmpty()
+
+    private fun decodeRoutingPayload(payload: String): String? {
+        val decodedPayload = runCatching {
+            URLDecoder.decode(payload.trim().replace("+", "%2B"), Charsets.UTF_8.name())
+        }.getOrDefault(payload.trim())
+
+        val normalizedPayload = decodedPayload
+            .removePrefixIgnoreCase(ROUTING_BASE64_PREFIX)
+            .let { it + "=".repeat((4 - it.length % 4) % 4) }
+
+        return listOf(
+            Base64.getUrlDecoder(),
+            Base64.getDecoder(),
+            Base64.getMimeDecoder()
+        ).firstNotNullOfOrNull { decoder ->
+            runCatching {
+                String(decoder.decode(normalizedPayload), Charsets.UTF_8)
+            }.getOrNull()
+        }
+    }
+
+    private fun String.removePrefixIgnoreCase(prefix: String): String =
+        if (startsWith(prefix, ignoreCase = true)) substring(prefix.length) else this
+
+    private data class RoutingConfig(
+        val rules: List<Rule>,
+        val domainStrategy: Int? = null
+    )
+
     suspend fun setIpV6Enable(enable: Boolean) {
         context.dataStore.edit {
             it[SettingsKeys.IPV6_ENABLE] = enable
@@ -318,6 +528,14 @@ class SettingsRepository
         context.dataStore.edit {
             it[SettingsKeys.SOCKS_PASSWORD] = password
         }
+    }
+
+    companion object {
+        private const val ROUTING_LINK_PREFIX = "happ://routing/"
+        private const val ROUTING_BASE64_PREFIX = "base64:"
+        private const val ROUTING_COMMAND_ADD = "add"
+        private const val ROUTING_COMMAND_ON_ADD = "onadd"
+        private const val ROUTING_COMMAND_OFF = "off"
     }
 
     suspend fun setSocksListen(address: String) {
